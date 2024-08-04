@@ -1,4 +1,7 @@
-# simple_tproxy_example
+# simple_tproxy_example with Docker
+
+This repository includes instruction for testing out the tproxy
+example with two docker containers.
 
 The simplest possible working example of TPROXY transparent proxying.
 
@@ -22,21 +25,49 @@ accepted sockets will be spoofing the client's intended destination. Of course,
 since you're working with ordinary socket file descriptors, you can plug right
 into frameworks like libevent.
 
-To run this example, you'll want one machine to be the proxy, and another to
-be the client. On the proxy:
-* Set up DHCP, giving the proxy itself out as a default gateway.
-* `sudo iptables -t mangle -A PREROUTING -i eth0 -p tcp --dport 80 -m tcp
-          -j TPROXY --on-ip 192.168.123.1 --on-port 1234 --tproxy-mark 1/1`
-* `sudo sysctl -w net.ipv4.ip_forward=1`
-* `sudo ip rule add fwmark 1/1 table 1`
-* `sudo ip route add local 0.0.0.0/0 dev lo table 1`
-* `gcc -o tproxy_captive_portal tproxy_captive_portal.c`
-* `sudo ./tproxy_captive_portal 192.168.123.1`, replacing 192.168.123.1 
-  appropriately.
+To run this example, you'll want one container to be the proxy, and another to
+be the client. 
 
-Connect (by ethernet, wifi, whatever) the client to the proxy. Then, in a
-browser on the client, try visiting http://11.22.33.44/whatever.html.
+First, build the docker container on your local machine
+```
+docker build -t tproxy-example .
+```
 
-TODO: add instructions to configure DHCP properly to allow running this example.
-I happen to currently use a Raspberry Pi as a wifi adapter for my desktop, so I
-didn't have to go through that in order to write this tutorial.
+Create two containers (with NET_ADMIN capabilities because we want to modify some
+networking things) connected with a docker network.
+
+```
+docker network create tproxy-net
+docker run -dit --cap-add=NET_ADMIN --network tproxy-net --name tproxy tproxy-example
+docker run -dit --cap-add=NET_ADMIN --network tproxy-net --name tproxy-client tproxy-example
+```
+
+Exec into the proxy:
+
+```
+docker exec -it tproxy /bin/bash
+
+# run ip addr to find out address associated with
+# eth0 interface
+iptables -t mangle -A PREROUTING -i eth0 -p tcp --dport 80 -m tcp
+          -j TPROXY --on-ip 172.19.0. --on-port 1234 --tproxy-mark 1/1
+
+sysctl -w net.ipv4.ip_forward=1
+ip rule add fwmark 1/1 table 1
+ip route add local 0.0.0.0/0 dev lo table 1
+./tproxy_captive_portal 172.19.0.2
+```
+
+
+Exec into the client container:
+
+```
+docker exec -it tproxy-client /bin/bash
+
+# change the default gateway to go to the proxy
+# so packets get routed to it
+
+ip route del default; ip route add default via <eth addr from proxy container above>
+curl http://11.22.33.44/whatever.html
+# SUCCESS, REQUEST IS SERVED BY TRANSPARENT PROXY!
+```
